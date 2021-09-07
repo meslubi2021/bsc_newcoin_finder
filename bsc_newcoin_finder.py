@@ -9,9 +9,16 @@ from time import sleep
 import requests
 from pydash import get as _
 from selectolax.parser import HTMLParser
+from bs4 import BeautifulSoup
 
-MIN_HOLDERS = 10
-MAX_HOLDERS = 100
+MIN_HOLDERS = 200
+LP_DEAD_MAX_INDEX = 2
+
+#TODO
+#1. check PancakeSwap in the first page of holders (bscscan)
+#2. check liquidity pool to be at least 30k (poo)
+#3. check volume: transfer should have 5/10 transactions per minute (bscscan)
+#4. check if it's really new (maybe from poo?)
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36',
@@ -136,6 +143,27 @@ def sync_bs(url: str, session=None):
     soup = HTMLParser(r.text if r else '')
     return soup
 
+def lp_dead_ok(token):
+    pancake_ok, dead_ok = False, False
+    api_url = "https://bscscan.com/token/generic-tokenholders2"
+    params = {
+        "m": "normal",
+        "a": token,
+        "p": "1",
+    }
+    soup = BeautifulSoup(requests.get(api_url, params=params).content, "html.parser")
+    for count, row in enumerate(soup.select("tr:has(td)")):
+        for td in row.select("td"):
+            links = td.select('a[href]')
+            if links:
+                link = td.select('a[href]')[0]
+                if "dead" in link['href']: dead_ok = True
+            name = td.get_text(strip=True)
+            if "PancakeSwap" in name: pancake_ok = True
+        if count == LP_DEAD_MAX_INDEX: break
+    print("pancake is: "+str(pancake_ok))
+    print("dead is: "+str(dead_ok))       
+    return pancake_ok and dead_ok
 
 def main():
     while True:
@@ -146,9 +174,12 @@ def main():
 
                 if '/token/' in href and '/images/main/empty-token.png' in get_attr(
                         'img', 'src', el):
+                    token = href.split("/token/")[-1]
                     url = f'https://bscscan.com{href}'
-                    poocoin_url = f'http://poocoin.app/tokens/{href.split("/token/")[-1]}'
+                    poocoin_url = f'http://poocoin.app/tokens/{token}'
                     if url not in coins:
+                        # Checking rule 1 / part 1: Holders count FIXME
+                        #url = "https://bscscan.com/token/0xb2f90ddc14d07bb42ad4d88266fde6e2afda9556#balances"
                         s = sync_bs(url)
                         t = get_text(None, s)
                         if 'LPs' in t or '-LP' in t or 'BLP' in t:
@@ -160,14 +191,20 @@ def main():
                                 if 'addresses' in text:
                                     holders = to_int(
                                         text.split('addresses')[0])
-
                                     print(holders, text)
-                                    if MIN_HOLDERS < holders < MAX_HOLDERS:
-                                        webbrowser.open(url)
-                                        webbrowser.open(poocoin_url)
-                                    break
-                    if holders > MIN_HOLDERS:
+                        if holders < MIN_HOLDERS:
+                            continue
+
+                        # Checking rule 1 / part 2: Liq Pool and dead major holders
+                        if not lp_dead_ok(token):
+                            continue
+                        # Checking rule 2: Liquidity pool
+                        # Checking rule 3: Volume
+
                         coins.add(url)
+                        webbrowser.open(url)
+                        webbrowser.open(poocoin_url)
+
             rand_sleep(1, 3)
         except KeyboardInterrupt:
             return
