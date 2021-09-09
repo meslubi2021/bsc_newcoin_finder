@@ -7,12 +7,15 @@ from random import choice, uniform
 from time import sleep
 
 import requests
+import re
 from pydash import get as _
 from selectolax.parser import HTMLParser
 from bs4 import BeautifulSoup
 
 MIN_HOLDERS = 200
 LP_DEAD_MAX_INDEX = 2
+
+token_cookie = ""
 
 #TODO
 #1. check PancakeSwap in the first page of holders (bscscan)
@@ -165,6 +168,63 @@ def lp_dead_ok(token):
     print("dead is: "+str(dead_ok))       
     return pancake_ok and dead_ok
 
+token_cookie = ""
+def volume_ok(token):
+
+
+
+    #import logging
+
+    # These two lines enable debugging at httplib level (requests->urllib3->http.client)
+    # You will see the REQUEST, including HEADERS and DATA, and RESPONSE with HEADERS but without DATA.
+    # The only thing missing will be the response.body which is not logged.
+    #try:
+    #    import http.client as http_client
+    #except ImportError:
+    #    # Python 2
+    #    import httplib as http_client
+    #http_client.HTTPConnection.debuglevel = 1
+#
+    ## You must initialize logging, otherwise you'll not see debug output.
+    #logging.basicConfig()
+    #logging.getLogger().setLevel(logging.DEBUG)
+    #requests_log = logging.getLogger("requests.packages.urllib3")
+    #requests_log.setLevel(logging.DEBUG)
+    #requests_log.propagate = True
+
+
+    with requests.Session() as s:
+        c = s.get(f"https://bscscan.com/token/{token}").text
+
+        try:
+            sid = re.search("sid\s=\s'(.*)';", c).group(1)
+        except AttributeError: 
+            return True # I guess we'll just skip this whole check then...
+
+        api_url = "https://bscscan.com/token/generic-tokentxns2"
+        params = {
+            "m": "normal",
+            "contractAddress": token,
+            "sid": sid,
+            "p": "1"
+        }
+        soup = BeautifulSoup(s.get(api_url, params=params).content, "html.parser")
+
+        #TODO continue here...
+        for count, row in enumerate(soup.select("tr:has(td)")):
+            for td in row.select("td"):
+                links = td.select('a[href]')
+                if links:
+                    link = td.select('a[href]')[0]
+                    if "dead" in link['href']: dead_ok = True
+                name = td.get_text(strip=True)
+                if "PancakeSwap" in name: pancake_ok = True
+            if count == LP_DEAD_MAX_INDEX: break
+        print("pancake is: "+str(pancake_ok))
+        print("dead is: "+str(dead_ok))       
+        return pancake_ok and dead_ok
+        return True
+
 def main():
     while True:
         try:
@@ -178,7 +238,7 @@ def main():
                     url = f'https://bscscan.com{href}'
                     poocoin_url = f'http://poocoin.app/tokens/{token}'
                     if url not in coins:
-                        # Checking rule 1 / part 1: Holders count FIXME
+                        # Checking rule 1, part 1 (Holders count) FIXME
                         #url = "https://bscscan.com/token/0xb2f90ddc14d07bb42ad4d88266fde6e2afda9556#balances"
                         s = sync_bs(url)
                         t = get_text(None, s)
@@ -192,14 +252,18 @@ def main():
                                     holders = to_int(
                                         text.split('addresses')[0])
                                     print(holders, text)
-                        if holders < MIN_HOLDERS:
-                            continue
+                    #    if holders < MIN_HOLDERS:
+                    #        continue
 
-                        # Checking rule 1 / part 2: Liq Pool and dead major holders
-                        if not lp_dead_ok(token):
-                            continue
+                        # Checking rule 1, part 2 (Liq Pool and dead major holders)
+                    #    if not lp_dead_ok(token):
+                    #        continue
+
                         # Checking rule 2: Liquidity pool
+
                         # Checking rule 3: Volume
+                        if not volume_ok(token):
+                            continue
 
                         coins.add(url)
                         webbrowser.open(url)
