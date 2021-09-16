@@ -14,8 +14,8 @@ from bs4 import BeautifulSoup
 
 MIN_HOLDERS = 200
 LP_DEAD_MAX_INDEX = 2
+MIN_TX_MIN = 8
 
-token_cookie = ""
 
 #TODO
 #1. check PancakeSwap in the first page of holders (bscscan)
@@ -168,31 +168,18 @@ def lp_dead_ok(token):
     print("dead is: "+str(dead_ok))       
     return pancake_ok and dead_ok
 
-token_cookie = ""
+def get_minutes(ts):
+    match = re.search(r'(?:(?P<h1>\d+)\shr[s]?\s(?P<m1>\d+)\smin)|(?:(?P<h2>\d+)\shr)|(?:(?P<mins>\d+)\smin)|(?:(?P<secs>\d+)\ssec)', ts)
+    h1 = int(match.group('h1')) if match.group('h1') else 0
+    h2 = int(match.group('h2')) if match.group('h2') else 0
+    m1 = int(match.group('m1')) if match.group('m1') else 0
+    mins = int(match.group('mins')) if match.group('mins') else 0
+    secs = int(match.group('secs')) if match.group('secs') else 0
+    hours = h1 + h2
+    mins += m1
+    return hours * 60 + mins + secs / 60
+
 def volume_ok(token):
-
-
-
-    #import logging
-
-    # These two lines enable debugging at httplib level (requests->urllib3->http.client)
-    # You will see the REQUEST, including HEADERS and DATA, and RESPONSE with HEADERS but without DATA.
-    # The only thing missing will be the response.body which is not logged.
-    #try:
-    #    import http.client as http_client
-    #except ImportError:
-    #    # Python 2
-    #    import httplib as http_client
-    #http_client.HTTPConnection.debuglevel = 1
-#
-    ## You must initialize logging, otherwise you'll not see debug output.
-    #logging.basicConfig()
-    #logging.getLogger().setLevel(logging.DEBUG)
-    #requests_log = logging.getLogger("requests.packages.urllib3")
-    #requests_log.setLevel(logging.DEBUG)
-    #requests_log.propagate = True
-
-
     with requests.Session() as s:
         c = s.get(f"https://bscscan.com/token/{token}").text
 
@@ -210,20 +197,12 @@ def volume_ok(token):
         }
         soup = BeautifulSoup(s.get(api_url, params=params).content, "html.parser")
 
-        #TODO continue here...
-        for count, row in enumerate(soup.select("tr:has(td)")):
-            for td in row.select("td"):
-                links = td.select('a[href]')
-                if links:
-                    link = td.select('a[href]')[0]
-                    if "dead" in link['href']: dead_ok = True
-                name = td.get_text(strip=True)
-                if "PancakeSwap" in name: pancake_ok = True
-            if count == LP_DEAD_MAX_INDEX: break
-        print("pancake is: "+str(pancake_ok))
-        print("dead is: "+str(dead_ok))       
-        return pancake_ok and dead_ok
-        return True
+        allTS = soup.find_all("td", class_="showAge")
+        count = len(allTS)
+        lastTS = allTS[count-1]
+        print(str(lastTS.get_text()))
+        lastTSTimeMin = get_minutes(lastTS.get_text())
+        return count // lastTSTimeMin > MIN_TX_MIN
 
 def main():
     while True:
