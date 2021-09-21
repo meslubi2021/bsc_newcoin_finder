@@ -1,22 +1,34 @@
-import json
 import os
 import traceback
 import webbrowser
 from itertools import cycle
 from random import choice, uniform
 from time import sleep
-
 import requests
 import re
 from pydash import get as _
 from selectolax.parser import HTMLParser
 from bs4 import BeautifulSoup
 
-#config
-MIN_HOLDERS = 200
-PS_DEAD_MAX_INDEX = 20
-MIN_TX_MIN = 8
+####### configuration #######
+MIN_HOLDERS = 250
+PS_DEAD_MAX_INDEX = 2
 MIN_LIQUIDITY_POOL = 30000
+MIN_TX_MINUTE = 8
+#############################
+
+"""
+The script applies the following rules in order to select coins:
+0. The coin is "new"
+1/1. Holders are more than ${MIN_HOLDERS}
+1/2. The Liquidity Pool and Dead Coin Wallet appear among the largest ${PS_DEAD_MAX_INDEX} holders
+2. The Liquidity Pool is higher than ${MIN_LIQUIDITY_POOL}
+3. The Volume is higher than ${MIN_TX_MINUTE} transactions per minute
+
+Usage:
+    ./bsc_newcoin_finder.py
+"""
+
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36',
@@ -85,7 +97,7 @@ def sync_fetch(url: str, session=None, headers=None):
     while tried < 5:
         try:
             proxy = next(proxies, None)
-            print(f'Getting {url}')
+            #print(f'Getting {url}')
             return (session or requests).get(
                 url,
                 headers=headers if headers else {'User-Agent': random_ua()},
@@ -145,11 +157,12 @@ def holders_count_ok(url):
             if 'addresses' in text:
                 holders = to_int(
                     text.split('addresses')[0])
-                print(holders, text)
+                #print(holders, text)
     return holders >= MIN_HOLDERS
 
 def ps_dead_ok(token):
     pancake_ok, dead_ok = False, False
+    a_token = ""
     api_url = "https://bscscan.com/token/generic-tokenholders2"
     params = {
         "m": "normal",
@@ -170,10 +183,10 @@ def ps_dead_ok(token):
             if "PancakeSwap" in name: 
                 pancake_ok = True
                 if link and "a=" in link['href']:
-                    a_token = link['href'].split('a=')[1] #extract the `a` token from the url, we need it later to check the liquidity pool
+                    a_token = link['href'].split('a=')[1] #extract the `a` token param from the href, we need it later to check the liquidity pool
         if count == PS_DEAD_MAX_INDEX: break
-    print("pancake is: "+str(pancake_ok))
-    print("dead is: "+str(dead_ok))       
+    #print("pancake is: "+str(pancake_ok))
+    #print("dead is: "+str(dead_ok))       
     return pancake_ok and dead_ok, a_token
 
 def get_minutes(ts):
@@ -211,13 +224,10 @@ def volume_ok(token):
         allTS = soup.find_all("td", class_="showAge")
         count = len(allTS)
         lastTS = allTS[count-1]
-        print(str(lastTS.get_text()))
         lastTSTimeMin = get_minutes(lastTS.get_text())
-        return count // lastTSTimeMin > MIN_TX_MIN
+        return count // lastTSTimeMin > MIN_TX_MINUTE
 
 def lp_ok(a):
-    print("This is a="+a)
-
     with requests.Session() as s:
         headers = {
             'User-Agent': random_ua()
@@ -226,6 +236,9 @@ def lp_ok(a):
         lp_div = soup.find("div", {"id": "ContentPlaceHolder1_divFilteredHolderValue"})
         lp_value = int(float(re.search("\$((\d+[,]?)+(\.\d+)?)", lp_div.get_text()).group(1).replace(",", "")))
     return lp_value >= MIN_LIQUIDITY_POOL
+
+def print_result(token, result, rule_id):
+    print("["+token+"] "+result+" rule "+rule_id)
 
 def main():
     while True:
@@ -240,22 +253,30 @@ def main():
                     url = f'https://bscscan.com{href}'
                     poocoin_url = f'http://poocoin.app/tokens/{token}'
                     if url not in coins:
-                        # rule 1, part 1 (holders count)
+                        # rule 1, part 1 (holders count > x)
                         if not holders_count_ok(url):
+                            print_result(token, "failed", "1 part 1\n")
                             continue
+                        print_result(token, "passed", "1 part 1")
 
-                        # rule 1, part 2 (liq Pool and dead major holders)
+                        # rule 1, part 2 (liq pool (PancakeSwap) and dead are in the top y holders)
                         ps_dead_major_h, a_token = ps_dead_ok(token)
                         if not ps_dead_major_h:
+                            print_result(token, "failed", "1 part 2\n")
                             continue
+                        print_result(token, "passed", "1 part 2")
 
-                        # rule 2: Liquidity pool
-                        if not lp_ok(a_token):
+                        # rule 2: liquidity pool > z
+                        if a_token and not lp_ok(a_token):
+                            print_result(token, "failed", "2\n")
                             continue
+                        print_result(token, "passed", "2")
 
-                        # rule 3: Volume
+                        # rule 3: Volume > w
                         if not volume_ok(token):
+                            print_result(token, "failed", "3\n")
                             continue
+                        print_result(token, "passed", "All Rules\n")
 
                         coins.add(url)
                         webbrowser.open(url)
