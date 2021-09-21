@@ -13,12 +13,12 @@ from selectolax.parser import HTMLParser
 from bs4 import BeautifulSoup
 
 MIN_HOLDERS = 200
-LP_DEAD_MAX_INDEX = 2
+LP_DEAD_MAX_INDEX = 20
 MIN_TX_MIN = 8
 
 
 #TODO
-#1. check PancakeSwap in the first page of holders (bscscan)
+#1. check PancakeSwap and Dead in the first page of holders (bscscan)
 #2. check liquidity pool to be at least 30k (poo)
 #3. check volume: transfer should have 5/10 transactions per minute (bscscan)
 #4. check if it's really new (maybe from poo?)
@@ -146,7 +146,7 @@ def sync_bs(url: str, session=None):
     soup = HTMLParser(r.text if r else '')
     return soup
 
-def lp_dead_ok(token):
+def ps_dead_ok(token):
     pancake_ok, dead_ok = False, False
     api_url = "https://bscscan.com/token/generic-tokenholders2"
     params = {
@@ -154,7 +154,10 @@ def lp_dead_ok(token):
         "a": token,
         "p": "1",
     }
-    soup = BeautifulSoup(requests.get(api_url, params=params).content, "html.parser")
+    headers = {
+        'User-Agent': random_ua()
+    }
+    soup = BeautifulSoup(requests.get(api_url, params=params, headers=headers).content, "html.parser")
     for count, row in enumerate(soup.select("tr:has(td)")):
         for td in row.select("td"):
             links = td.select('a[href]')
@@ -162,11 +165,14 @@ def lp_dead_ok(token):
                 link = td.select('a[href]')[0]
                 if "dead" in link['href']: dead_ok = True
             name = td.get_text(strip=True)
-            if "PancakeSwap" in name: pancake_ok = True
+            if "PancakeSwap" in name: 
+                pancake_ok = True
+                if link and "a=" in link['href']:
+                    a_token = link['href'].split('a=')[1] #extract the `a` token from the url, we need it later to check the liquidity pool
         if count == LP_DEAD_MAX_INDEX: break
     print("pancake is: "+str(pancake_ok))
     print("dead is: "+str(dead_ok))       
-    return pancake_ok and dead_ok
+    return pancake_ok and dead_ok, a_token
 
 def get_minutes(ts):
     match = re.search(r'(?:(?P<h1>\d+)\shr[s]?\s(?P<m1>\d+)\smin)|(?:(?P<h2>\d+)\shr)|(?:(?P<mins>\d+)\smin)|(?:(?P<secs>\d+)\ssec)', ts)
@@ -181,7 +187,10 @@ def get_minutes(ts):
 
 def volume_ok(token):
     with requests.Session() as s:
-        c = s.get(f"https://bscscan.com/token/{token}").text
+        headers = {
+            'User-Agent': random_ua()
+        }
+        c = s.get(f"https://bscscan.com/token/{token}", headers=headers).text
 
         try:
             sid = re.search("sid\s=\s'(.*)';", c).group(1)
@@ -195,7 +204,7 @@ def volume_ok(token):
             "sid": sid,
             "p": "1"
         }
-        soup = BeautifulSoup(s.get(api_url, params=params).content, "html.parser")
+        soup = BeautifulSoup(s.get(api_url, params=params, headers=headers).content, "html.parser")
 
         allTS = soup.find_all("td", class_="showAge")
         count = len(allTS)
@@ -203,6 +212,11 @@ def volume_ok(token):
         print(str(lastTS.get_text()))
         lastTSTimeMin = get_minutes(lastTS.get_text())
         return count // lastTSTimeMin > MIN_TX_MIN
+
+def lp_ok(a):
+    # TODO CONTINUE HERE
+    print("This is a="+a)
+    return True
 
 def main():
     while True:
@@ -231,14 +245,17 @@ def main():
                                     holders = to_int(
                                         text.split('addresses')[0])
                                     print(holders, text)
-                    #    if holders < MIN_HOLDERS:
-                    #        continue
+                        if holders < MIN_HOLDERS:
+                            continue
 
                         # Checking rule 1, part 2 (Liq Pool and dead major holders)
-                    #    if not lp_dead_ok(token):
-                    #        continue
+                        ps_dead_passed, a_token = ps_dead_ok(token)
+                        if not ps_dead_passed:
+                            continue
 
                         # Checking rule 2: Liquidity pool
+                        if not lp_ok(a_token):
+                            continue
 
                         # Checking rule 3: Volume
                         if not volume_ok(token):
