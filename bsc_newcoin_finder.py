@@ -12,16 +12,11 @@ from pydash import get as _
 from selectolax.parser import HTMLParser
 from bs4 import BeautifulSoup
 
+#config
 MIN_HOLDERS = 200
-LP_DEAD_MAX_INDEX = 20
+PS_DEAD_MAX_INDEX = 20
 MIN_TX_MIN = 8
-
-
-#TODO
-#1. check PancakeSwap and Dead in the first page of holders (bscscan)
-#2. check liquidity pool to be at least 30k (poo)
-#3. check volume: transfer should have 5/10 transactions per minute (bscscan)
-#4. check if it's really new (maybe from poo?)
+MIN_LIQUIDITY_POOL = 30000
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36',
@@ -43,10 +38,8 @@ USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36'
 ]
 
-
 def random_ua():
     return choice(USER_AGENTS)
-
 
 def file2list(filename):
     result = []
@@ -54,7 +47,6 @@ def file2list(filename):
         with open(filename, encoding='utf-8') as f:
             return f.read().splitlines()
     return []
-
 
 def load_proxy():
     proxies = set()
@@ -65,10 +57,8 @@ def load_proxy():
                 proxies.add(f'http://{px[2]}:{px[3]}@{px[0]}:{px[1]}')
     return proxies
 
-
 proxies = cycle(load_proxy())
 coins = set(file2list('coins.txt'))
-
 
 def get_text(selector: str, soup: HTMLParser):
     try:
@@ -81,17 +71,14 @@ def get_text(selector: str, soup: HTMLParser):
     except:
         return ''
 
-
 def rand_sleep(start, end):
     sleep(uniform(start, end))
-
 
 def to_int(s):
     try:
         return int(s.replace(',', '').replace(' ', '').strip())
     except:
         return 0
-
 
 def sync_fetch(url: str, session=None, headers=None):
     tried = 0
@@ -146,6 +133,21 @@ def sync_bs(url: str, session=None):
     soup = HTMLParser(r.text if r else '')
     return soup
 
+def holders_count_ok(url):
+    s = sync_bs(url)
+    t = get_text(None, s)
+    if 'LPs' in t or '-LP' in t or 'BLP' in t:
+        return False
+    els = get_next_elements('div', 'div', 'Holders:', s)
+    if els:
+        for node in els:
+            text = get_text(None, node)
+            if 'addresses' in text:
+                holders = to_int(
+                    text.split('addresses')[0])
+                print(holders, text)
+    return holders >= MIN_HOLDERS
+
 def ps_dead_ok(token):
     pancake_ok, dead_ok = False, False
     api_url = "https://bscscan.com/token/generic-tokenholders2"
@@ -169,7 +171,7 @@ def ps_dead_ok(token):
                 pancake_ok = True
                 if link and "a=" in link['href']:
                     a_token = link['href'].split('a=')[1] #extract the `a` token from the url, we need it later to check the liquidity pool
-        if count == LP_DEAD_MAX_INDEX: break
+        if count == PS_DEAD_MAX_INDEX: break
     print("pancake is: "+str(pancake_ok))
     print("dead is: "+str(dead_ok))       
     return pancake_ok and dead_ok, a_token
@@ -214,9 +216,16 @@ def volume_ok(token):
         return count // lastTSTimeMin > MIN_TX_MIN
 
 def lp_ok(a):
-    # TODO CONTINUE HERE
     print("This is a="+a)
-    return True
+
+    with requests.Session() as s:
+        headers = {
+            'User-Agent': random_ua()
+        }
+        soup = BeautifulSoup(s.get(f"https://bscscan.com/token/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c?a={a}", headers=headers).content,"html.parser")
+        lp_div = soup.find("div", {"id": "ContentPlaceHolder1_divFilteredHolderValue"})
+        lp_value = int(float(re.search("\$((\d+[,]?)+(\.\d+)?)", lp_div.get_text()).group(1).replace(",", "")))
+    return lp_value >= MIN_LIQUIDITY_POOL
 
 def main():
     while True:
@@ -224,47 +233,33 @@ def main():
             soup = sync_bs('https://bscscan.com/tokentxns')
             for el in soup.css('#content td a'):
                 href = get_attr(None, 'href', el)
-
+                # rule 0: the coin is new
                 if '/token/' in href and '/images/main/empty-token.png' in get_attr(
                         'img', 'src', el):
                     token = href.split("/token/")[-1]
                     url = f'https://bscscan.com{href}'
                     poocoin_url = f'http://poocoin.app/tokens/{token}'
                     if url not in coins:
-                        # Checking rule 1, part 1 (Holders count) FIXME
-                        #url = "https://bscscan.com/token/0xb2f90ddc14d07bb42ad4d88266fde6e2afda9556#balances"
-                        s = sync_bs(url)
-                        t = get_text(None, s)
-                        if 'LPs' in t or '-LP' in t or 'BLP' in t:
-                            continue
-                        els = get_next_elements('div', 'div', 'Holders:', s)
-                        if els:
-                            for node in els:
-                                text = get_text(None, node)
-                                if 'addresses' in text:
-                                    holders = to_int(
-                                        text.split('addresses')[0])
-                                    print(holders, text)
-                        if holders < MIN_HOLDERS:
+                        # rule 1, part 1 (holders count)
+                        if not holders_count_ok(url):
                             continue
 
-                        # Checking rule 1, part 2 (Liq Pool and dead major holders)
-                        ps_dead_passed, a_token = ps_dead_ok(token)
-                        if not ps_dead_passed:
+                        # rule 1, part 2 (liq Pool and dead major holders)
+                        ps_dead_major_h, a_token = ps_dead_ok(token)
+                        if not ps_dead_major_h:
                             continue
 
-                        # Checking rule 2: Liquidity pool
+                        # rule 2: Liquidity pool
                         if not lp_ok(a_token):
                             continue
 
-                        # Checking rule 3: Volume
+                        # rule 3: Volume
                         if not volume_ok(token):
                             continue
 
                         coins.add(url)
                         webbrowser.open(url)
                         webbrowser.open(poocoin_url)
-
             rand_sleep(1, 3)
         except KeyboardInterrupt:
             return
