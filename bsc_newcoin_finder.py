@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 ####### configuration #######
 MIN_HOLDERS = 250
-PS_DEAD_MAX_INDEX = 5
+PS_DEAD_MAX_HOLDERS_POSITION = 3
 MIN_LIQUIDITY_POOL = 30000
 MIN_TX_MINUTE = 8
 EXIT_AFTER_FOUND_COINS = 4
@@ -22,7 +22,7 @@ EXIT_AFTER_FOUND_COINS = 4
 The script applies the following rules in order to select coins:
   0) The coin is "new"
 1.1) Holders are more than ${MIN_HOLDERS}
-1.2) The Liquidity Pool and Dead Coin Wallet appear among the largest ${PS_DEAD_MAX_INDEX} holders
+1.2) The Liquidity Pool and Dead Coin Wallet appear among the largest ${PS_DEAD_MAX_HOLDERS_POSITION} holders
   2) The Liquidity Pool is higher than ${MIN_LIQUIDITY_POOL}. 
      We only use liquidity pools that appear in the first page of holders here.
   3) The Volume is higher than ${MIN_TX_MINUTE} transactions per minute
@@ -81,23 +81,12 @@ def load_proxy():
 proxies = cycle(load_proxy())
 coins = set(file2list('coins.txt'))
 
-def get_text(selector: str, soup: HTMLParser):
-    try:
-        t = (soup.css_first(selector) if selector else soup).text(
-            separator=' ', strip=True).replace('\xa0', ' ').replace(
-                '\t', ' ').replace('\r', ' ').replace('\n', ' ').strip()
-        while '  ' in t:
-            t = t.replace('  ', ' ')
-        return t
-    except:
-        return ''
-
 def rand_sleep(start, end):
     sleep(uniform(start, end))
 
 def to_int(s):
     try:
-        return int(s.replace(',', '').replace(' ', '').strip())
+        return int(s.replace(',', '').replace(' ', '').replace('\n', '').strip())
     except:
         return 0
 
@@ -122,24 +111,6 @@ def sync_fetch(url: str, session=None, headers=None):
             tried += 1
             sleep(1)
 
-
-def get_next_elements(selector: str, next_selector, text, soup: HTMLParser):
-    try:
-        elements = []
-        for el in soup.css(selector):
-            t = el.text().replace('\xa0', ' ').strip()
-            if text == t:
-                start = False
-                for cnode in el.parent.iter():
-                    if cnode == el:
-                        start = True
-                    elif start:
-                        elements.append(cnode)
-        return elements
-    except:
-        return None
-
-
 def get_attr(selector: str, attr: str, soup: HTMLParser):
     try:
         return (soup.css_first(selector) if selector else soup).attributes.get(
@@ -155,21 +126,21 @@ def sync_bs(url: str, session=None):
 
 def holders_count_ok(url):
     holders = 0
-    s = sync_bs(url)
-    t = get_text(None, s)
-    if 'LPs' in t or '-LP' in t or 'BLP' in t:
+    headers = {
+        'User-Agent': random_ua()
+    }
+    soup = BeautifulSoup(requests.get(url, headers=headers).content, "html.parser")
+    holders_div = soup.find("div", {"id": "ContentPlaceHolder1_tr_tokenHolders"})
+    if not holders_div:
         return False
-    els = get_next_elements('div', 'div', 'Holders:', s)
-    if els:
-        for node in els:
-            text = get_text(None, node)
-            if 'addresses' in text:
-                holders = to_int(
-                    text.split('addresses')[0])
+    divs = holders_div.find_all('div')
+    for d in divs:
+        if "addresses" in d.get_text():
+            holders = holders or to_int(d.get_text().split('addresses')[0])
     return holders >= MIN_HOLDERS
 
 def ps_dead_ok(token):
-    pancake_ok, dead_ok = False, False
+    pancake, dead = 0, 0
     a_tokens = []
     max_index = 0
     api_url = "https://bscscan.com/token/generic-tokenholders2"
@@ -188,15 +159,18 @@ def ps_dead_ok(token):
             if links:
                 link = td.select('a[href]')[0]
                 if "dead" in link['href']: 
-                    dead_ok = True
+                    dead += 1
                     max_index = max(max_index, count)
+                    break
             name = td.get_text(strip=True)
             if "PancakeSwap" in name: 
-                pancake_ok = True
+                pancake += 1
                 max_index = max(max_index, count)
                 if link and "a=" in link['href']:
-                    a_tokens.append(link['href'].split('a=')[1]) #extract the `a` token params from href, used later to check the liquidity pools size    
-    return max_index <= PS_DEAD_MAX_INDEX and pancake_ok and dead_ok, a_tokens
+                    a_tokens.append(link['href'].split('a=')[1]) #extract the `a` token params from href, used later to check the liquidity pools size  
+                break
+    max_position = max_index - pancake - dead + 3 
+    return max_position <= PS_DEAD_MAX_HOLDERS_POSITION and pancake and dead, a_tokens
 
 def get_minutes(ts):
     match = re.search(r'(?:(?P<h1>\d+)\shr[s]?\s(?P<m1>\d+)\smin)|(?:(?P<h2>\d+)\shr)|(?:(?P<mins>\d+)\smin)|(?:(?P<secs>\d+)\ssec)', ts)
@@ -264,6 +238,7 @@ def main():
     found_coin = 0
     while found_coin < EXIT_AFTER_FOUND_COINS:
         try:
+            checked = set()
             soup = sync_bs('https://bscscan.com/tokentxns')
             for el in soup.css('#content td a'):
                 href = get_attr(None, 'href', el)
@@ -273,7 +248,9 @@ def main():
                     token = href.split("/token/")[-1]
                     url = f'https://bscscan.com{href}'
                     #poocoin_url = f'http://poocoin.app/tokens/{token}'
-                    if url not in coins:
+                    if url not in coins and token not in checked:
+                        checked.add(token)
+
                         # rule 1, part 1 (holders count > MIN_HOLDERS)
                         if not holders_count_ok(url):
                             print_result(token, "failed", "1 part 1\nAbort!!!")
@@ -303,13 +280,12 @@ def main():
                         found_coin+=1
                         webbrowser.open(url)
                         #webbrowser.open(poocoin_url)
-            rand_sleep(1, 3)
+                        rand_sleep(2, 4)
         except KeyboardInterrupt:
             return
         except:
             traceback.print_exc()
             sleep(1)
-
 
 if __name__ == '__main__':
     try:
