@@ -254,6 +254,7 @@ def main():
                         # rule 1, part 1 (holders count > MIN_HOLDERS)
                         if not holders_count_ok(url):
                             print_result(token, "failed", "1 part 1\nAbort!!!")
+                            rand_sleep(1, 3)
                             continue
                         print_result(token, "passed", "1 part 1")
 
@@ -261,26 +262,30 @@ def main():
                         ps_dead_major_h, a_tokens = ps_dead_ok(token)
                         if not ps_dead_major_h:
                             print_result(token, "failed", "1 part 2\nAbort!!!")
+                            rand_sleep(1, 3)
                             continue
                         print_result(token, "passed", "1 part 2")
 
                         # rule 2: liquidity pool > MIN_LIQUIDITY_POOL
                         if a_tokens and not lp_ok(a_tokens):
                             print_result(token, "failed", "2\nAbort!!!")
+                            rand_sleep(1, 3)
                             continue
                         print_result(token, "passed", "2")
 
                         # rule 3: Volume > MIN_TX_MINUTE
                         if not volume_ok(token):
                             print_result(token, "failed", "3\nAbort!!!")
+                            rand_sleep(1, 3)
                             continue
                         print_result(token, "passed", "all Rules!\n")
 
                         coins.add(url)
                         found_coin+=1
                         webbrowser.open(url)
+                        rand_sleep(1, 3)
                         #webbrowser.open(poocoin_url)
-                        rand_sleep(2, 4)
+            rand_sleep(1, 3)
         except KeyboardInterrupt:
             return
         except:
