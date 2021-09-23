@@ -4,10 +4,9 @@
 
 - Install latest Python 3
 - Install required packages:
-
-```sh
-pip install -r requirements.txt
-```
+    ```sh
+    pip install -r requirements.txt
+    ```
 
 ## Start
 
