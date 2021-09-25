@@ -285,7 +285,6 @@ def main():
                         webbrowser.open(url)
                         rand_sleep(1, 3)
                         #webbrowser.open(poocoin_url)
-            rand_sleep(1, 3)
         except KeyboardInterrupt:
             return
         except:
