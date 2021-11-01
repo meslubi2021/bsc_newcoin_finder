@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 
 ####### configuration #######
 MIN_HOLDERS = 250
+MAX_HOLDERS = 2000
 PS_DEAD_MAX_HOLDERS_POSITION = 3
 MIN_LIQUIDITY_POOL = 30000
 MIN_TX_MINUTE = 8
@@ -21,7 +22,7 @@ EXIT_AFTER_FOUND_COINS = 4
 """
 The script applies the following rules in order to select coins:
   0) The coin is "new"
-1.1) Holders are more than ${MIN_HOLDERS}
+1.1) Holders are more than ${MIN_HOLDERS} and less than ${MAX_HOLDERS}
 1.2) The Liquidity Pool and Dead Coin Wallet appear among the largest ${PS_DEAD_MAX_HOLDERS_POSITION} holders
   2) The Liquidity Pool is higher than ${MIN_LIQUIDITY_POOL}. 
      We only use liquidity pools that appear in the first page of holders here.
@@ -137,7 +138,7 @@ def holders_count_ok(url):
     for d in divs:
         if "addresses" in d.get_text():
             holders = holders or to_int(d.get_text().split('addresses')[0])
-    return holders >= MIN_HOLDERS
+    return MIN_HOLDERS <= holders <= MAX_HOLDERS
 
 def ps_dead_ok(token):
     pancake, dead = 0, 0
@@ -251,7 +252,7 @@ def main():
                     if url not in coins and token not in checked:
                         checked.add(token)
 
-                        # rule 1, part 1 (holders count > MIN_HOLDERS)
+                        # rule 1, part 1 (holders count)
                         if not holders_count_ok(url):
                             print_result(token, "failed", "1 part 1\nAbort!!!")
                             rand_sleep(1, 3)
